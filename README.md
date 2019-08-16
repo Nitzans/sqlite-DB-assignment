@@ -10,5 +10,6 @@ The Fourth output is written into an XML file and stored as a new table in the D
 
 ### Instructions  
 1. Run Receiver.py.  
-2. Run Sender.py with the following arguments: <DB-PATH> <COUNTRY> <YEAR>.  
+2. Run Sender.py with the following arguments: <<DB-PATH>> <<COUNTRY>> <<YEAR>>.  
+
 You can run Sender.py many times with different parameters.  
