@@ -10,6 +10,10 @@ import sys
 reload(sys)
 sys.setdefaultencoding('utf8')
 
+table1_unique_countries = set()
+table2_unique_countries = set()
+table3_unique_countries = set()
+
 
 def callback(ch, method, properties, body):
     print("----- Message received -----")
@@ -21,45 +25,69 @@ def callback(ch, method, properties, body):
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    purchase_csv(cursor, country, year)
-    items_csv(cursor, country, year)
-    albums_json(cursor, country, year)
+
+    try:
+        cursor.execute('CREATE TABLE purchase_country(country NVARCHAR(40) PRIMARY KEY UNIQUE, purchases INT)')
+    except sqlite3.OperationalError:
+        print("Table purchase_country is already exist, continue without creation.")
+    purchase_csv(cursor, country)
+
+    try:
+        cursor.execute('CREATE TABLE items_country(country NVARCHAR(40) PRIMARY KEY UNIQUE, itemsAmount INT)')
+    except sqlite3.OperationalError:
+        print("Table items_country is already exist, continue without creation.")
+    items_csv(cursor, country)
+
+    albums_json(cursor, country)
+
+    try:
+        cursor.execute('CREATE TABLE top_sellers(country NVARCHAR(40), title NVARCHAR(160), year INT, topSellerAmount INT, UNIQUE (country, year))')
+    except sqlite3.OperationalError:
+        print("Table top_sellers is already exist, continue without creation.")
     specific_xml(cursor, country, year)
     conn.commit()
     conn.close()
 
 
-def purchase_csv(cursor, country, year):
+def purchase_csv(cursor, country):
+    if country in table1_unique_countries:
+        return
     outputfile = 'purchase-per-country.csv'
-    result = cursor.execute('SELECT billingCountry, COUNT(*) FROM invoices GROUP BY billingCountry')
-    with open(outputfile, mode='w') as purchase_file:
+    result = cursor.execute('SELECT billingCountry, COUNT(*) as purchases '
+                            'FROM invoices WHERE billingCountry=\''+country+'\'')
+    with open(outputfile, mode='a') as purchase_file:
         purchase_writer = csv.writer(purchase_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
         for output in result:
             purchase_writer.writerow([output[0], output[1]])
-    print "> " + outputfile + " was created"
+            cursor.execute('INSERT or IGNORE INTO purchase_country VALUES(\''+output[0]+'\','+str(output[1])+')')
+    table1_unique_countries.add(country)
 
 
-def items_csv(cursor, country, year):
+def items_csv(cursor, country):
+    if country in table2_unique_countries:
+        return
     outputfile = 'items-per-country.csv'
     result = cursor.execute('SELECT invoices.BillingCountry, SUM(Quantity) as ItemsAmount '
                             'FROM invoice_items '
                             'JOIN invoices '
-                            'WHERE invoices.InvoiceId==invoice_items.InvoiceId '
-                            'GROUP BY invoices.BillingCountry')
-    with open(outputfile, mode='w') as items_file:
+                            'ON invoices.InvoiceId==invoice_items.InvoiceId '
+                            'WHERE billingCountry=\''+country+'\'')
+    with open(outputfile, mode='a') as items_file:
         items_writer = csv.writer(items_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
         for output in result:
             items_writer.writerow([output[0], output[1]])
-    print "> " + outputfile + " was created"
+            cursor.execute('INSERT or IGNORE INTO items_country VALUES(\'' + output[0] + '\',' + str(output[1]) + ')')
+    table2_unique_countries.add(country)
 
 
-def albums_json(cursor, country, year):
+def albums_json(cursor, country):
     outputfile = 'albums-per-country.json'
     result = cursor.execute('SELECT DISTINCT invoices.BillingCountry, albums.Title '
                             'FROM invoices '
                             'JOIN invoice_items ON invoices.InvoiceId==invoice_items.InvoiceId '
                             'JOIN tracks ON tracks.TrackId==invoice_items.TrackId '
                             'JOIN albums ON albums.AlbumId==tracks.AlbumId '
+                            'WHERE billingCountry=\''+country+'\' '
                             'ORDER BY BillingCountry')
     data = {}
     with open(outputfile, mode='w') as json_file:
@@ -69,10 +97,12 @@ def albums_json(cursor, country, year):
             else:
                 data[output[0]].append(output[1])
         json.dump(data, json_file, indent=3, ensure_ascii=False)
-    print "> " + outputfile + " was created"
 
 
 def specific_xml(cursor, country, year):
+    if (country, year) in table3_unique_countries:
+        print table3_unique_countries
+        return
     outputfile = 'best-seller-rock-albums.xml'
     result = cursor.execute('SELECT BillingCountry, Title, Year, MAX(SellsAmount) as topSellerAmount '
                             'FROM('
@@ -83,12 +113,9 @@ def specific_xml(cursor, country, year):
                                 'JOIN tracks ON tracks.TrackId==invoice_items.TrackId '
                                 'JOIN albums ON albums.AlbumId==tracks.AlbumId '
                                 'JOIN genres ON genres.GenreId==tracks.GenreId '
-                                'WHERE Year>\'' + year + '\'AND genres.Name==\'Rock\' '
-                                'GROUP BY albums.Title '
-                                'ORDER BY BillingCountry) '
+                                'WHERE Year>\'' + year + '\'AND genres.Name==\'Rock\' AND invoices.BillingCountry==\''+country+'\''
+                                'GROUP BY albums.Title) '
                             'GROUP BY BillingCountry')
-
-    # belgium, Germany
     with open(outputfile, mode='w') as xml_file:
         albums_info = ET.Element('albums_info')
         for output in result:
@@ -102,13 +129,13 @@ def specific_xml(cursor, country, year):
             title.text = output[1]
             year.text = str(output[2])
             top_seller.text = str(output[3])
+            cursor.execute('INSERT or IGNORE INTO top_sellers VALUES(\'' + output[0] + '\',\'' + output[1] + '\',' + str(output[2]) +',' + str(output[3]) + ')')
+
         mydata = ET.tostring(albums_info)
         dom = xml.dom.minidom.parseString(mydata)
         indent_xml = dom.toprettyxml()
         xml_file.write(indent_xml)
-    print "> " + outputfile + " was created"
-
-
+    table3_unique_countries.add((country, year))
 
 
 def listen():
